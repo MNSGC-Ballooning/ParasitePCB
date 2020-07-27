@@ -15,8 +15,8 @@
 
 #define dallasOnePin 28           // Data pin for the first dallas temperature sensor -- PCB pin:
 #define pressureOnePin A13         // Data pin for the first honeywell pressure sensor -- PCB pin:
-#define thermIntPin A16
-#define thermExtPin A17
+#define thermIntPin A17
+#define thermExtPin A16
 #define ubloxSerial Serial3       // Serial communication lines for the ublox GPS -- PCB pins: Serial5
 
 MS5611 baro;
@@ -43,21 +43,34 @@ float currentTempF; // The current temperature in Fahrenheit
 void ubloxSetup(){
   ubloxSerial.begin(UBLOX_BAUD);
   ublox.init();
-  delay(10);
-  Serial.println("Ublox initialized");
+  
   byte i = 0;
   while (i<50) {
     i++;
     if (ublox.setAirborne()) {
       Serial.println("Air mode successfully set.");
       break;}
-    if (i==50) Serial.println("Failed to set to air mode.");
+    if (i==50){
+      Serial.println("Failed to set to air mode.");
+      updateOled("Failed to set GPS Air Mode");
+      delay(5000);
+    }
   }
+  updateOled("GPS init\ncomplete!");
+  delay(1000);
 }
 
 void imuSetup(){
   Wire.begin();
-  if(!imu.begin()) Serial.println("Failed to communicate with LSM9DS1.");
+  if(!imu.begin()){
+    Serial.println("Failed to communicate with LSM9DS1.");
+    updateOled("IMU\nOffline.");
+    delay(5000);
+  }
+  else{
+    updateOled("IMU init\ncomplete!");
+    delay(1000);
+  }
 }
 
 void updateIMU(){
@@ -74,6 +87,12 @@ void updateIMU(){
   gyroscope[0] = imu.calcGyro(imu.gx);
   gyroscope[1] = imu.calcGyro(imu.gy);
   gyroscope[2] = imu.calcGyro(imu.gz);
+}
+
+void logIMUdata(){
+  IMUdata = String(magnetometer[0]) + ", " + String(magnetometer[1]) + ", " + String(magnetometer[2]) + ", " +
+            String(accelerometer[0]) + ", " + String(accelerometer[1]) + ", " + String(accelerometer[2]) + ", " +
+            String(gyroscope[0]) + ", " + String(gyroscope[1]) + ", " + String(gyroscope[2]) + ", " + String(millis());
 }
 
 void oledSetup(){
@@ -95,16 +114,24 @@ void updateOled(String disp){
   oled.setCursor(0, 0);
   oled.println(disp);
   oled.display();
-  //delay(1000);
-  //oled.clear(PAGE);
 }
 
 void msSetup() {
-  baro.begin();
+  //updateOled("initializing\nbaro...");
+  while(!baro.begin()){
+    updateOled("baro init failed!");
+  }
+  /*if(!baro.begin()){
+    Serial.println("MS5611 Altimeter not active");
+    updateOled("digital baro not active");
+  }*/
+  updateOled("baro init\ncomplete!");
+  delay(1000);
 }
 
 void updateMS() {
   msTemperature = baro.readTemperature();
+  msTemperature = msTemperature*(9.0/5.0) + 32.0;
   msPressure = baro.readPressure(); 
   msPressure = msPressure * 0.000145038;
 }
@@ -146,29 +173,54 @@ void updateUblox(){
 }
 
 void updateDataStrings(){
-  data = String(ublox.getMonth()) + "/" + String(ublox.getDay()) + "/" + String(ublox.getYear()) + "\t" + 
-          String(ublox.getHour()-5) + ":" + String(ublox.getMinute()) + ":" + String(ublox.getSecond()) + "\t "
-           + String(ublox.getLat(), 4) + "\t" + String(ublox.getLon(), 4) + "\t " + String(ublox.getAlt_feet(), 5)
-           +  "\t " + String(altitudeFt) + "\t" + String(thermistorInt) + "\t " + String(thermistorExt) + "\t"
-           + "\t" + String(msTemperature) + "\t " + String(pressureOnePSI) + "\t" + String(msPressure) + "\t" + String(millis()) + "\t" + xbeeMessage;
+  altitudeFtGPS = ublox.getAlt_feet();
+  latitudeGPS = ublox.getLat();
+  longitudeGPS = ublox.getLon();
 
  groundData = String(ublox.getMonth()) + "/" + String(ublox.getDay()) + "/" + String(ublox.getYear()) + "," +
             String(ublox.getHour()-5) + ":" + String(ublox.getMinute()) + ":" + String(ublox.getSecond()) + ","
-           + String(ublox.getLat(), 4) + ", " + String(ublox.getLon(), 4) + ", " + String(ublox.getAlt_feet(), 4)
+           + String(ublox.getLat(), 4) + ", " + String(ublox.getLon(), 4) + ", " + String(altitudeFtGPS, 4)
            +  ", " + String(altitudeFt) + ", " + String(thermistorInt) + ", " + String(thermistorExt) + ", "
-           + String(msTemperature) + ", " + String(pressureOnePSI) + ", " + String(msPressure) + "," + String(millis()) + ", " + xbeeMessage;
+           + String(msTemperature) + ", " + String(pressureOnePSI) + ", " + String(msPressure) + ", " + String(millis()) + ", " + xbeeMessage;
 
-  updateOled("GPS Alt:\n" + String(ublox.getAlt_feet(),1) + "ft\n\nGuess:\n" + String(altitudeFt) + "ft");
+ data = groundData +  ", " + String(magnetometer[0]) + ", " + String(magnetometer[1]) + ", " + String(magnetometer[2]) + ", " +
+            String(accelerometer[0]) + ", " + String(accelerometer[1]) + ", " + String(accelerometer[2]) + ", " +
+            String(gyroscope[0]) + ", " + String(gyroscope[1]) + ", " + String(gyroscope[2]);
+            
+  updateOled(String(latitudeGPS) + "\n" + String(longitudeGPS) + "\n" + String(altitudeFtGPS,1) + "ft\nInt:" + String(int(thermistorInt)) + " F\nExt:" + String(int(thermistorExt)) + " F\n" + String(msPressure,2) + " PSI");
   if(ublox.getFixAge() > 2000) fix = false;
   else fix = true;
   logData(data);
 }
 
 void magnetometerBootup(){
+  updateOled("Wave magnet over IMU to begin logging");
+  
   while((abs(magnetometer[0]) < 3.50) || (abs(magnetometer[1]) < 3.50) || (abs(magnetometer[2]) < 3.50))
   {
-    digitalWrite(fixLED,HIGH);
+    ledGlissando();
     updateIMU();
   }
+  updateOled("Logging!");
   digitalWrite(fixLED,LOW);
+  digitalWrite(ppodLED,LOW);
+  digitalWrite(xbeeLED,LOW);
+  digitalWrite(sdLED,LOW);
+}
+
+void ledGlissando() {
+  digitalWrite(fixLED,HIGH);
+  delay(50);
+  digitalWrite(ppodLED,HIGH);
+  delay(50);
+  digitalWrite(fixLED,LOW);
+  digitalWrite(xbeeLED,HIGH);
+  delay(50);
+  digitalWrite(ppodLED,LOW);
+  digitalWrite(sdLED,HIGH);
+  delay(50);
+  digitalWrite(xbeeLED,LOW);
+  delay(50);
+  digitalWrite(sdLED,LOW);
+  delay(150);
 }

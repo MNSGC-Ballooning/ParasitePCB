@@ -7,17 +7,15 @@ Servo smart;
 unsigned long int testTimer;
 
 void ppodSetup(){
-
+  
   digitalWrite(ppodLED,HIGH);
   digitalWrite(xbeeLED,HIGH);
-  digitalWrite(ppodLED,HIGH);
-  digitalWrite(ppodLED,HIGH);
+  digitalWrite(fixLED,HIGH);
+  digitalWrite(sdLED,HIGH);
   Serial.print("Initializing PPOD... ");
   smart.attach(smartPin);
   smart.write(smartInitialPosition);
   Serial.println("PPOD initialized");
-  pinMode(setAltSwitch, INPUT_PULLUP);
-  pinMode(altSwitch, INPUT_PULLUP);
   delay(10);
 
   while(setAltVal==1){
@@ -31,20 +29,27 @@ void ppodSetup(){
      }
      if(cutAltitude == 110000){
         updateOled("Set 30 second servo test");
-        delay(50);
+        delay(100);
       }
       else{
-        updateOled("Set Alt:\n" + String(int(cutAltitude)) + "ft");
-        delay(50);
+        updateOled("Set PPOD\nAlt:\n\n" + String(int(cutAltitude)) + "ft");
+        delay(100);
       }
    }
+   updateOled("Alt Set!\n\n" + String(int(cutAltitude)) + "ft");
+   if(cutAltitude==110000) updateOled("Alt Set!\n\n30 Second Test");
+   delay(2000);
    testTimer = millis();
+   digitalWrite(ppodLED,LOW);
+   digitalWrite(xbeeLED,LOW);
+   digitalWrite(fixLED,LOW);
+   digitalWrite(sdLED,LOW);
   }
 
 void updateSmart(){
   if (cutAltitude == 110000 && (millis()-testTimer>30000)) { smartRelease = true; }
   
-  if(altitudeFt > cutAltitude || millis() > cutTime){ smartRelease = true; }
+  if(altitudeFtGPS > cutAltitude || millis() > cutTime){ smartRelease = true; }
   
   if(smartRelease){
     smart.write(smartReleasePosition);
@@ -60,4 +65,6 @@ void updateSmart(){
       xbee.send(xbeeMessage);
     }
   }
-}
+  if(smartRelease == true)digitalWrite(ppodLED,HIGH);
+    
+  }

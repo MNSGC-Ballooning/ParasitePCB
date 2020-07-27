@@ -9,12 +9,16 @@
 #define commsSwitchPin 21
 #define setAltSwitch 17
 #define altSwitch 16
+#define artSwitchPin 10
+#define baroSwitchPin 9
 
 int rfd900 = 1; // set true if you want this thing to operate with a rfd900 on serialX (declare above)
 int ppod = 1; // set true if you want this thing to operate as ppod flight computer
 int magnetBootup = 1; // set true if you want to activate flight by waving a magnet over the IMU
 int setAltVal = 1;
 int altVal = 1;
+int baroOn = 1;
+int artOn = 1;
 
 float cutTime = 70*60000.0; // x (minutes) * 60000;
 float cutAltitude = 10000; // 50,000 ft ASL cut!!
@@ -24,18 +28,20 @@ int smartInitialPosition = 0; // the angle in degrees for smart initial position
 bool smartReleaseTransmission = true; // This ensures only one message is relayed to the ground after release has occurred.
 String commandMessage; // Appends a message stating the radio deployed the cubes if that happens
 
-String header = "Hour \t min \t sec \t Lat \t Lon \t Alt(ft) \t AltEst(ft) \t intT(F) \t extT(F) \t msTemp (F) \t msPressure(Pa) \t time since bootup (s) \t recent xbee message";
+String header = "Date, Time, Lat, Lon, Alt(ft), AltEst(ft), intT(F), extT(F), msTemp(F), analogPress(PSI), msPressure(PSI), time since bootup (ms), Recent Radio Traffic, magnetometer x, magnetometer y, magnetometer z, accelerometer x, accelerometer y, accelerometer z, gyroscope x, gyroscope y, gyroscope z";
 unsigned long int dataTimer = 0;
+unsigned long int dataTimerIMU = 0;
 int dataRate = 1000; // 1000 millis = 1 second
+int dataRateIMU = 250; // 250 millis = .25 seconds
 int analogResolutionBits = 14;
 int analogResolutionVals = pow(2,analogResolutionBits);
 float pressureBoundary1;
 float pressureBoundary2;
 float pressureBoundary3;
 float pressureOnePSI;
-float msPressure;
-float msTemperature;
-float altitudeFt;
+float msPressure = -1.0;
+float msTemperature = -1.0;
+float altitudeFt = -1.0;
 unsigned long int fixTimer = 0;
 bool fix = false; // determines if the GPS has a lock
 
@@ -48,13 +54,17 @@ float magnetometer[3]; // {x, y, z}
 float accelerometer[3]; // {x, y, z}
 float gyroscope[3]; // {x, y, z}
 
+float altitudeFtGPS;
+float latitudeGPS;
+float longitudeGPS;
 String data;
 String groundData;
+String IMUdata;
 
 String exclamation = "!"; // this needs to be at the end of every 
 bool commandRelease = false;
 String groundCommand;
-String xbeeID = "PPOD";
+String xbeeID = "PARA";
 bool xbeeAlternation = false; // this will allow the xbee to alternate between sending data to MOC SOC and data via MOC SOC to the ground
 unsigned long int xbeeTimer = 0;
 int xbeeRate = 5000; // 10000 millis = 10 seconds
@@ -66,9 +76,16 @@ void setup() {
   Serial.println("Serial online");
   pinMode(fixLED,OUTPUT); 
   pinMode(xbeeLED,OUTPUT);
+  pinMode(sdLED,OUTPUT); 
+  pinMode(ppodLED,OUTPUT);
   pinMode(13,OUTPUT);
+  pinMode(setAltSwitch, INPUT_PULLUP);
+  pinMode(altSwitch, INPUT_PULLUP);
+  checkSwitches(); // slide and button switch statuss
 
-  checkSwitches();
+  if(artOn==0)xbeeID = "ART";
+  if(rfd900==0)xbeeID = "COMM";
+  if(ppod==0)xbeeID = "PPOD";
 
   Serial.print("starting OLED setup... ");
   oledSetup();
@@ -80,8 +97,10 @@ void setup() {
   Serial.println("IMU setup complete");
 
   Serial.print("starting Altimeter setup... ");
-  oledSetup();
-  msSetup();
+  if(baroOn==1)msSetup();
+  else{ updateOled("MS5611\nOffline.");
+    delay(2000);
+  }
   Serial.println("Altimeter setup complete");
 
   Serial.print("starting SD setup... ");
@@ -102,8 +121,6 @@ void setup() {
   logData(header);
   if(magnetBootup==0) magnetometerBootup();
   buzzerSequence();  
-
-  digitalWrite(xbeeLED, HIGH);
 }
 
 void loop() {
@@ -147,48 +164,35 @@ void pressureToAltitude(){
   else{altFt = -1.0;}
   
   altitudeFt = altFt;
+  if(baroOn==0)altitudeFt = -1.0;
 }
 
 void updateData(){
   updateUblox();
-  blinkSequence();
   updateXbee();
-  
+
+  if(millis() - dataTimerIMU > dataRateIMU){
+    dataTimerIMU = millis();
+    updateIMU();
+  }
   if(millis() - dataTimer > dataRate){
     dataTimer = millis();
-    digitalWrite(xbeeLED,HIGH);
-    delay(100);
-    digitalWrite(xbeeLED,LOW); // TESTING
+    if(fix == true){
+      digitalWrite(fixLED,HIGH);
+    }
+    digitalWrite(sdLED,HIGH);
+    delay(30);
+    digitalWrite(sdLED,LOW);
+    digitalWrite(fixLED,LOW);
     pressureToAltitude();
     updateDallas();
     updateThermistor();
-    updateMS();
+    if(baroOn==1) updateMS(); //Not every payload has one
     updatePressure();
     updateIMU();
     updateSmart();
     updateDataStrings();
   }        
-}
-
-void blinkSequence(){
-  if(fix){
-    if(millis()-fixTimer > 1000){
-      fixTimer = millis();
-      //Blink(fixLED,fixLED);
-    }
-  }
-  else{
-    if(millis()-fixTimer > 200){
-      fixTimer = millis();
-      //Blink(fixLED,fixLEDval);
-    }
-  }
-}
-
-
-void Blink(int led, bool ledVal){
-  ledVal = !ledVal;
-  digitalWrite(led,ledVal);
 }
 
 void buzzerSequence(){
@@ -209,10 +213,12 @@ void checkSwitches(){
   pinMode(ppodSwitchPin, INPUT_PULLUP);
   pinMode(magnetSwitchPin, INPUT_PULLUP);
   pinMode(commsSwitchPin, INPUT_PULLUP);
-
-  //digitalWrite(fixLED,HIGH);
+  pinMode(artSwitchPin,INPUT_PULLUP);
+  pinMode(baroSwitchPin,INPUT_PULLUP);
 
   ppod = digitalRead(ppodSwitchPin);
   rfd900 = digitalRead(commsSwitchPin);
   magnetBootup = digitalRead(magnetSwitchPin);
+  artOn = digitalRead(artSwitchPin);
+  baroOn = digitalRead(baroSwitchPin);
 }
